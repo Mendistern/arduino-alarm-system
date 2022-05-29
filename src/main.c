@@ -20,13 +20,14 @@
 #define PASSWORD_LENGTH 6 
 #define SECONDS_TILL_ALARM 20
 
+
 //System related vars
-int isObstacleDetected = 0;
+volatile int isObstacleDetected = 0;
 int password[PASSWORD_LENGTH];
 int isPasswordSet = 0;
 int secondsTillAlarm = SECONDS_TILL_ALARM;
 int isAlarmSet = 0;
-int isAlarmTriggered = 0;
+volatile int isAlarmTriggered = 0;
 
 
 
@@ -34,6 +35,10 @@ int isAlarmTriggered = 0;
 int currentNumberOfButtonsPressedForPasswordSetup = 0;
 int confirmedShouldSetupSecondsTillAlarm = 0;
 int shouldSetupSecondsTillAlarm = 0;
+
+//log
+int loggerSize = 160;
+int logCounter = 0;
 
 //Sound related vars
 #define C5 523.250
@@ -49,6 +54,14 @@ typedef struct{
   int seconds;
   int *passcode;  
 }ALARM;
+
+typedef struct{
+  int turnedOff;
+  int tries;
+  int inSeconds;
+}LOG;
+
+LOG *logger ;
 
 ALARM alarm;
 
@@ -161,14 +174,6 @@ void setupSecondsTillAlarm(){
 
 }
 
-void silenceAlarm(){
-  //todo
-  buzzerOff();
-  stopTimer();
-  isAlarmTriggered = 0;
-  isObstacleDetected = 0;
-  waitForAlarm();
-}
 
 void printPassword(){
   printf("This is your password: ");
@@ -207,15 +212,35 @@ int checkEnteredPassword(int *attemptedPasswordArray){
   
 }
 
+void addToLog(LOG *logpoint,int seconds, int tries, int turnedOff){
+  logpoint->inSeconds = seconds;
+  logpoint->tries = tries;
+  logpoint->turnedOff = turnedOff;
+}
+
 void printLog(){
-  //TODO
+  printf("Your alarm setting:\n\tSeconds till alarm goes off\t: \t%d.\n\tIs password set\t: \t%d.\n",alarm.seconds,isPasswordSet);
+  for (size_t i = 0; i < logCounter; i++)
+  {
+    printf("Was the alarm turned off\t:\t%c\n\tAmount of attempts: %d\n\tAlarm had %d seconds left.\n",logger[i].turnedOff==1?'y':'n',logger[i].tries,(alarm.seconds-logger[i].inSeconds)<0?0:(alarm.seconds-logger[i].inSeconds));
+  }
+
+
+
+  printf("Your logger will now be cleared.\n");
+  free(logger);
+  
 }
 
 void waitToTriggerBuzzer(int *timeTillBuzzer){
-  printf("Time till Buzzer is %d\n", timeTillBuzzer);
   startTimer();
+
   int lastSecond = 0;
   int wrongAttempt = 0;
+
+  int playAlarm = 0;
+
+  
 
  
 
@@ -244,8 +269,11 @@ void waitToTriggerBuzzer(int *timeTillBuzzer){
         
       }else{
         printf("Correct password.\n");
+        wrongAttempt=0;
+        playAlarm = 0;
+
+        addToLog(&logger[logCounter++],getSeconds(),wrongAttempt,1);
         silenceAlarm();
-        waitForAlarm();
         return;
       }     
     }
@@ -255,7 +283,6 @@ void waitToTriggerBuzzer(int *timeTillBuzzer){
     {
       _delay_ms(BUTTON_DELAY);
       if (isButtonPressed(0)){
-        printf("Button 0 pressed\n");
         passwordAttemptArr[passwordSequenceCounter++] = 0;
         
       }
@@ -280,8 +307,9 @@ void waitToTriggerBuzzer(int *timeTillBuzzer){
     }
     
    
-    if (getSeconds()>=alarm.seconds || wrongAttempt==3)
+    if (getSeconds()>=alarm.seconds || wrongAttempt>=3||playAlarm==1)
     {
+      playAlarm = 1;
       stopTimer();
       triggerBuzzer();
     }
@@ -301,37 +329,52 @@ void triggerAlarm(int secondsToWait){
   
   printf("Alarm triggered\n");
   isAlarmTriggered = 1;
-  printf("You have %d seconds till the alarm goes off.",secondsToWait);
+  printf("You have %d seconds till the alarm goes off.\n",secondsToWait);
 
   //pass by reference
   waitToTriggerBuzzer(secondsToWait);
 }
 
 void waitForAlarm(){
+  
+    turnOnObstacleDetector();
 
   printf("Press button 1 to view the log.\n");
   while (!isObstacleDetected)
   {
-    dimLed(0,50,250);
     writeString("ACTV");
+    dimLed(0,50,250);
     if(isButtonPressed(0)){
-      _delay_ms(BUTTON_DELAY);
       printLog();
     }
   }
-
   //alarm triggered
   //pass by value
   triggerAlarm(alarm.seconds);
   
 }
 
+void silenceAlarm(){
+  isObstacleDetected = 0;
+  isAlarmTriggered = 0;
+  buzzerOff();
+  stopTimer();
+  
+  waitForAlarm();
+
+  
+}
+
+
 ISR(PCINT2_vect) {  
-  if(isAlarmSet)isObstacleDetected = 1;
+  
+  if(isAlarmSet&&isAlarmTriggered==0&&!isObstacleDetected){
+    turnOffObstacleDetector();
+    isObstacleDetected = 1;
+  }
 }
 
 ISR(TIMER2_COMPA_vect) {
-
   runTickCheck();
     
 }
@@ -353,18 +396,20 @@ int main(void){
   sei();
 
 
-  printf("Uw huis, beveiligd!\n");
+
+
+  printf("Secure your house!\n");
 
   alarm.seconds = secondsTillAlarm;
   alarm.passcode = &password[0];
 
-  printf("Gelieve een combinatie van %d knoppen te drukken om het wachtwoord in te stellen\n",PASSWORD_LENGTH);
+  printf("Please enter a combination of %d buttons to setup your passcode.\n",PASSWORD_LENGTH);
 setPassword();
 
 printPassword();
 
-  printf("Wil je de tijdsduur tot de activatie van de alarm wijzigen? Momenteel heb je %d seconden.\n",SECONDS_TILL_ALARM);
-  printf("Druk op\n \tknop 1\t:\tNee\n\tKnop 2\t:\tJa\n");
+  printf("Do you want to change the amount of seconds till your alarm goes off? currently you have %d seconds. \n",SECONDS_TILL_ALARM);
+  printf("Click on\n \tButton 1\t:\tNo\n\tButton 2\t:\tYes\n");
 
   waitForPotentioSetupWizard();
 
@@ -374,23 +419,19 @@ printPassword();
 
 
 
+
+  logger = malloc(loggerSize * sizeof(LOG));
+
   //Activate alarm
   isAlarmSet = 1;
   waitForAlarm();
 
-
-
-
-
-
-
-  printf("hello world");
-
-  while (1) {
-   continue;
-   
-  }
   
 
+
+
+
+
+  
   return 0;
 }
